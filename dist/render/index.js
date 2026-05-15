@@ -3,7 +3,7 @@ import { renderSessionLine } from './session-line.js';
 import { renderToolsLine } from './tools-line.js';
 import { renderAgentsLine } from './agents-line.js';
 import { renderTodosLine } from './todos-line.js';
-import { renderIdentityLine, renderProjectLine, renderAddedDirsLine, renderGitFilesLine, renderEnvironmentLine, renderPromptCacheLine, renderUsageLine, renderMemoryLine, renderSessionTokensLine, renderSessionTimeLine, } from './lines/index.js';
+import { renderIdentityLine, renderProjectLine, renderAddedDirsLine, renderGitFilesLine, renderEnvironmentLine, renderPromptCacheLine, renderUsageLine, renderMemoryLine, renderSessionTokensLine, renderSessionTimeLine, renderPrStatusLine, renderReviewInboxLine, renderAnnouncementLine, } from './lines/index.js';
 import { dim, RESET } from './colors.js';
 import { getTerminalWidth, UNKNOWN_TERMINAL_WIDTH } from '../utils/terminal.js';
 import { codePointCellWidth, isCjkAmbiguousWide } from './width.js';
@@ -304,6 +304,12 @@ function renderElementLine(ctx, element, options) {
             return display?.showTodos === false ? null : renderTodosLine(ctx);
         case 'sessionTime':
             return renderSessionTimeLine(ctx);
+        case 'prStatus':
+            return renderPrStatusLine(ctx);
+        case 'reviewInbox':
+            return renderReviewInboxLine(ctx);
+        case 'announcement':
+            return renderAnnouncementLine(ctx);
     }
 }
 function renderCompact(ctx) {

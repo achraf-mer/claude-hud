@@ -8,6 +8,7 @@ import { renderPromptCacheLine } from './lines/prompt-cache.js';
 import { renderSessionTimeLine } from './lines/session-time.js';
 import { t } from '../i18n/index.js';
 import { formatResetTime } from './format-reset-time.js';
+import { glyphPair } from '../format/glyph.js';
 const DEBUG = process.env.DEBUG?.includes('claude-hud') || process.env.DEBUG === '*';
 /**
  * Renders the full session line (model + context bar + project + git + counts + usage + duration).
@@ -81,11 +82,12 @@ export function renderSessionLine(ctx) {
         }
         // Show ahead/behind (with space separator for readability)
         if (gitConfig?.showAheadBehind) {
+            const spacing = ctx.config?.display?.glyphSpacing ?? 'normal';
             if (ctx.gitStatus.ahead > 0) {
-                gitParts.push(` ↑${ctx.gitStatus.ahead}`);
+                gitParts.push(` ${glyphPair('↑', String(ctx.gitStatus.ahead), spacing)}`);
             }
             if (ctx.gitStatus.behind > 0) {
-                gitParts.push(` ↓${ctx.gitStatus.behind}`);
+                gitParts.push(` ${glyphPair('↓', String(ctx.gitStatus.behind), spacing)}`);
             }
         }
         // Show file stats in Starship-compatible format (!modified +added ✘deleted ?untracked)

@@ -10,6 +10,7 @@ import { getMemoryUsage } from "./memory.js";
 import { resolveEffortLevel } from "./effort.js";
 import { applyContextWindowFallback } from "./context-cache.js";
 import { getUsageFromExternalSnapshot } from "./external-usage.js";
+import { loadPrSnapshot } from "./pr-snapshot.js";
 import { setLanguage, t } from "./i18n/index.js";
 export { getUsageFromExternalSnapshot } from "./external-usage.js";
 import { fileURLToPath } from "node:url";
@@ -53,7 +54,7 @@ export async function main(overrides = {}) {
             lastCompactPostTokens: transcript.lastCompactPostTokens,
         });
         const { claudeMdCount, rulesCount, mcpCount, hooksCount, outputStyle } = await deps.countConfigs(stdin.cwd);
-        const config = await deps.loadConfig();
+        const config = await deps.loadConfig(stdin.cwd);
         setLanguage(config.language);
         const gitStatus = config.gitStatus.enabled
             ? await deps.getGitStatus(stdin.cwd)
@@ -77,6 +78,9 @@ export async function main(overrides = {}) {
         const memoryUsage = config.display.showMemoryUsage && config.lineLayout === "expanded"
             ? await deps.getMemoryUsage()
             : null;
+        const prSnapshot = config.github.enabled
+            ? loadPrSnapshot(config, stdin.cwd, deps.now())
+            : null;
         const ctx = {
             stdin,
             transcript,
@@ -94,6 +98,7 @@ export async function main(overrides = {}) {
             claudeCodeVersion,
             effortLevel: effortInfo?.level,
             effortSymbol: effortInfo?.symbol,
+            prSnapshot,
         };
         deps.render(ctx);
     }

@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { getHudPluginDir } from './claude-config-dir.js';
 export const DEFAULT_ELEMENT_ORDER = [
+    'announcement',
     'project',
     'addedDirs',
     'context',
@@ -10,6 +11,8 @@ export const DEFAULT_ELEMENT_ORDER = [
     'promptCache',
     'memory',
     'environment',
+    'prStatus',
+    'reviewInbox',
     'tools',
     'agents',
     'todos',
@@ -35,6 +38,29 @@ export const DEFAULT_CONFIG = {
         branchOverflow: 'truncate',
         pushWarningThreshold: 0,
         pushCriticalThreshold: 0,
+    },
+    github: {
+        enabled: true,
+        snapshotPath: '',
+        snapshotMaxAgeMs: 300000,
+        reviews: {
+            style: 'auto',
+            maxNames: 4,
+            filterBots: true,
+            showStale: true,
+        },
+        inbox: {
+            enabled: true,
+            scope: 'current-repo',
+            showAuthors: true,
+            maxItems: 4,
+        },
+        announcements: {
+            enabled: true,
+            label: 'announcement',
+            includePinned: true,
+            maxItems: 3,
+        },
     },
     display: {
         showModel: true,
@@ -79,6 +105,7 @@ export const DEFAULT_CONFIG = {
         modelOverride: '',
         customLine: '',
         timeFormat: 'relative',
+        glyphSpacing: 'normal',
     },
     colors: {
         context: 'green',
@@ -126,6 +153,63 @@ function validateModelFormat(value) {
 }
 function validateTimeFormat(value) {
     return value === 'relative' || value === 'absolute' || value === 'both';
+}
+function validateGlyphSpacing(value) {
+    return value === 'tight' || value === 'normal' || value === 'loose';
+}
+function validateReviewerStyle(value) {
+    return value === 'auto' || value === 'names' || value === 'counts';
+}
+function validateInboxScope(value) {
+    return value === 'current-repo' || value === 'all';
+}
+function validatePositiveCount(value, fallback) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
+        return fallback;
+    }
+    return Math.floor(value);
+}
+function mergeGithubConfig(value) {
+    const fallback = DEFAULT_CONFIG.github;
+    if (!value || typeof value !== 'object') {
+        return {
+            enabled: fallback.enabled,
+            snapshotPath: fallback.snapshotPath,
+            snapshotMaxAgeMs: fallback.snapshotMaxAgeMs,
+            reviews: { ...fallback.reviews },
+            inbox: { ...fallback.inbox },
+            announcements: { ...fallback.announcements },
+        };
+    }
+    const raw = value;
+    const reviewsRaw = raw.reviews ?? {};
+    const inboxRaw = raw.inbox ?? {};
+    const announcementsRaw = raw.announcements ?? {};
+    return {
+        enabled: typeof raw.enabled === 'boolean' ? raw.enabled : fallback.enabled,
+        snapshotPath: typeof raw.snapshotPath === 'string' ? raw.snapshotPath.trim() : fallback.snapshotPath,
+        snapshotMaxAgeMs: validateFreshnessMs(raw.snapshotMaxAgeMs),
+        reviews: {
+            style: validateReviewerStyle(reviewsRaw.style) ? reviewsRaw.style : fallback.reviews.style,
+            maxNames: validatePositiveCount(reviewsRaw.maxNames, fallback.reviews.maxNames),
+            filterBots: typeof reviewsRaw.filterBots === 'boolean' ? reviewsRaw.filterBots : fallback.reviews.filterBots,
+            showStale: typeof reviewsRaw.showStale === 'boolean' ? reviewsRaw.showStale : fallback.reviews.showStale,
+        },
+        inbox: {
+            enabled: typeof inboxRaw.enabled === 'boolean' ? inboxRaw.enabled : fallback.inbox.enabled,
+            scope: validateInboxScope(inboxRaw.scope) ? inboxRaw.scope : fallback.inbox.scope,
+            showAuthors: typeof inboxRaw.showAuthors === 'boolean' ? inboxRaw.showAuthors : fallback.inbox.showAuthors,
+            maxItems: validatePositiveCount(inboxRaw.maxItems, fallback.inbox.maxItems),
+        },
+        announcements: {
+            enabled: typeof announcementsRaw.enabled === 'boolean' ? announcementsRaw.enabled : fallback.announcements.enabled,
+            label: typeof announcementsRaw.label === 'string' && announcementsRaw.label.trim()
+                ? announcementsRaw.label.trim().slice(0, 64)
+                : fallback.announcements.label,
+            includePinned: typeof announcementsRaw.includePinned === 'boolean' ? announcementsRaw.includePinned : fallback.announcements.includePinned,
+            maxItems: validatePositiveCount(announcementsRaw.maxItems, fallback.announcements.maxItems),
+        },
+    };
 }
 function validateColorName(value) {
     return value === 'dim'
@@ -427,7 +511,11 @@ export function mergeConfig(userConfig) {
         timeFormat: validateTimeFormat(migrated.display?.timeFormat)
             ? migrated.display.timeFormat
             : DEFAULT_CONFIG.display.timeFormat,
+        glyphSpacing: validateGlyphSpacing(migrated.display?.glyphSpacing)
+            ? migrated.display.glyphSpacing
+            : DEFAULT_CONFIG.display.glyphSpacing,
     };
+    const github = mergeGithubConfig(migrated.github);
     const colors = {
         context: validateColorValue(migrated.colors?.context)
             ? migrated.colors.context
@@ -469,20 +557,111 @@ export function mergeConfig(userConfig) {
             ? migrated.colors.barEmpty
             : DEFAULT_CONFIG.colors.barEmpty,
     };
-    return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, gitStatus, display, colors };
+    return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, gitStatus, github, display, colors };
 }
-export async function loadConfig() {
-    const configPath = getConfigPath();
+/**
+ * Walk up from `startDir` to find the nearest directory containing a
+ * `.git` entry (file or directory). Returns the absolute path to that
+ * directory, or null if no git repo is found before hitting the
+ * filesystem root.
+ */
+function findRepoRoot(startDir) {
     try {
-        if (!fs.existsSync(configPath)) {
-            return mergeConfig({});
+        let current = path.resolve(startDir);
+        const root = path.parse(current).root;
+        while (current && current !== root) {
+            if (fs.existsSync(path.join(current, '.git'))) {
+                return current;
+            }
+            const parent = path.dirname(current);
+            if (parent === current)
+                break;
+            current = parent;
         }
-        const content = fs.readFileSync(configPath, 'utf-8');
-        const userConfig = JSON.parse(content);
-        return mergeConfig(userConfig);
+        return null;
     }
     catch {
-        return mergeConfig({});
+        return null;
     }
+}
+/**
+ * Read a partial HudConfig from `<repo-root>/.claude-hud.json`. Returns
+ * an empty object on any failure (missing, malformed, unreadable).
+ */
+function loadRepoConfig(cwd) {
+    const repoRoot = findRepoRoot(cwd);
+    if (!repoRoot)
+        return {};
+    const repoConfigPath = path.join(repoRoot, '.claude-hud.json');
+    try {
+        if (!fs.existsSync(repoConfigPath))
+            return {};
+        const content = fs.readFileSync(repoConfigPath, 'utf-8');
+        const parsed = JSON.parse(content);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return {};
+        }
+        return parsed;
+    }
+    catch {
+        return {};
+    }
+}
+/**
+ * Deep-merge `override` over `base`. Plain objects merge recursively,
+ * arrays and primitives are replaced. The output is a new object;
+ * inputs are not mutated.
+ */
+function deepMerge(base, override) {
+    const result = { ...base };
+    for (const key of Object.keys(override)) {
+        const overrideVal = override[key];
+        if (overrideVal === undefined)
+            continue;
+        const baseVal = result[key];
+        const bothAreObjects = overrideVal !== null && typeof overrideVal === 'object' && !Array.isArray(overrideVal) &&
+            baseVal !== null && typeof baseVal === 'object' && !Array.isArray(baseVal);
+        if (bothAreObjects) {
+            result[key] = deepMerge(baseVal, overrideVal);
+        }
+        else {
+            result[key] = overrideVal;
+        }
+    }
+    return result;
+}
+function readUserConfig() {
+    const configPath = getConfigPath();
+    try {
+        if (!fs.existsSync(configPath))
+            return {};
+        const content = fs.readFileSync(configPath, 'utf-8');
+        return JSON.parse(content);
+    }
+    catch {
+        return {};
+    }
+}
+/**
+ * Resolve the final HudConfig by layering:
+ *   1. defaults (in mergeConfig)
+ *   2. user global config (~/.claude/plugins/claude-hud/config.json)
+ *   3. per-repo config (<repo-root>/.claude-hud.json) — only when `cwd` is given
+ *
+ * Each layer deep-merges over the previous. Validation runs once on the
+ * final composite so any layer can violate constraints without
+ * corrupting the result.
+ */
+export async function loadConfig(cwd) {
+    const userConfig = readUserConfig();
+    if (!cwd) {
+        return mergeConfig(userConfig);
+    }
+    const repoConfig = loadRepoConfig(cwd);
+    if (Object.keys(repoConfig).length === 0) {
+        return mergeConfig(userConfig);
+    }
+    const merged = deepMerge(userConfig, repoConfig);
+    return mergeConfig(merged);
 }
 //# sourceMappingURL=config.js.map
