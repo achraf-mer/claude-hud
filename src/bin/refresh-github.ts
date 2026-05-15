@@ -9,6 +9,7 @@ import { fetchPrSnapshot } from '../github.js';
 import { getDefaultSnapshotPath } from '../pr-snapshot.js';
 import type { PrSnapshot } from '../types.js';
 
+
 /**
  * Refresher binary, invoked by Claude Code's Stop hook after each turn.
  *
@@ -36,7 +37,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const snapshotPath = config.github.snapshotPath?.trim() || getDefaultSnapshotPath(os.homedir());
+  const snapshotPath = config.github.snapshotPath?.trim() || getDefaultSnapshotPath(cwd, os.homedir());
   try {
     fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
     fs.writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2), 'utf8');

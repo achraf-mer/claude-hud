@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { getHudPluginDir } from './claude-config-dir.js';
 import type { HudConfig } from './config.js';
 import type {
@@ -43,19 +44,30 @@ const VALID_ERRORS = new Set<PrSnapshotError>([
 ]);
 
 /**
+ * Per-cwd snapshot path. Two Claude Code sessions in different working
+ * directories must NOT share a snapshot file — otherwise each session's
+ * Stop hook overwrites the other's data. The cwd hash gives us a stable
+ * per-directory key without needing to shell out to git from the render
+ * path.
+ */
+function snapshotKeyForCwd(cwd: string): string {
+  return createHash('sha1').update(path.resolve(cwd)).digest('hex').slice(0, 16);
+}
+
+/**
  * Default location of the PR snapshot when `config.github.snapshotPath` is empty.
  * Mirrors where the refresher binary writes the file by default.
  */
-export function getDefaultSnapshotPath(homeDir: string = os.homedir()): string {
-  return path.join(getHudPluginDir(homeDir), 'cache', 'github.json');
+export function getDefaultSnapshotPath(cwd: string, homeDir: string = os.homedir()): string {
+  return path.join(getHudPluginDir(homeDir), 'cache', `github-${snapshotKeyForCwd(cwd)}.json`);
 }
 
-function resolveSnapshotPath(config: HudConfig): string {
+function resolveSnapshotPath(config: HudConfig, cwd: string): string {
   const configured = config.github.snapshotPath?.trim();
   if (configured) {
     return configured;
   }
-  return getDefaultSnapshotPath();
+  return getDefaultSnapshotPath(cwd);
 }
 
 function parseDate(value: unknown): Date | null {
@@ -172,13 +184,24 @@ function parsePr(raw: unknown): PrStatus | null {
  * Returns a snapshot with `error` set when the refresher recorded a
  * surfaced error (e.g. gh not authed). Renderers decide whether to
  * show a hint or hide entirely.
+ *
+ * The snapshot path is derived from `cwd` so that two Claude Code
+ * sessions in different working directories don't overwrite each
+ * other's data via the shared Stop hook.
  */
-export function loadPrSnapshot(config: HudConfig, now: number = Date.now()): PrSnapshot | null {
+export function loadPrSnapshot(
+  config: HudConfig,
+  cwd: string | undefined,
+  now: number = Date.now(),
+): PrSnapshot | null {
   if (!config.github.enabled) {
     return null;
   }
+  if (!cwd) {
+    return null;
+  }
 
-  const snapshotPath = resolveSnapshotPath(config);
+  const snapshotPath = resolveSnapshotPath(config, cwd);
 
   let raw: string;
   try {

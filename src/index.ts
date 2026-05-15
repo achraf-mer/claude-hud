@@ -115,7 +115,7 @@ export async function main(overrides: Partial<MainDeps> = {}): Promise<void> {
         : null;
 
     const prSnapshot = config.github.enabled
-      ? loadPrSnapshot(config, deps.now())
+      ? loadPrSnapshot(config, stdin.cwd, deps.now())
       : null;
 
     const ctx: RenderContext = {
