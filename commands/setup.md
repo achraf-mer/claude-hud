@@ -323,10 +323,64 @@ Verify the first bytes are `7B 0D 0A` (`{` + CRLF) or `7B 0A` (`{` + LF), not `E
 [System.IO.File]::ReadAllBytes($path)[0..2]
 ```
 
+## Step 3b: Install GitHub Workflow Stop Hook
+
+The HUD's GitHub workflow features (PR status, review inbox, announcement banner) read from a snapshot file written by a refresher binary at `dist/bin/refresh-github.js`. Without a `Stop` hook running this refresher after each Claude turn, the snapshot stales within 5 minutes and the PR/inbox/announcement lines disappear silently — a confusing failure mode that's hard to diagnose.
+
+This step installs the Stop hook so the snapshot stays fresh automatically. The hook is harmless when `gh` isn't installed or authed (it silently no-ops) and costs ~2 GitHub API calls per Claude turn, well under the 5000/hour authenticated quota.
+
+### Idempotency check
+
+Read the current merged `settings.json`. If any entry under `hooks.Stop[]` already has a `command` field containing `refresh-github.js` OR `claude-hud`, **skip this step entirely** — the hook is already installed and we don't want duplicates.
+
+### Generate the Stop hook command
+
+**Platform `darwin` or `linux`, or Platform `win32` + Shell `bash`**:
+
+```
+bash -c 'plugin_dir=$(ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/claude-hud/*/ 2>/dev/null | sort -V | tail -1); [ -n "$plugin_dir" ] && exec node "${plugin_dir}dist/bin/refresh-github.js"'
+```
+
+The `[ -n "$plugin_dir" ] &&` guard makes the hook no-op cleanly if the plugin is uninstalled or moved — no error spam in the user's terminal.
+
+**Platform `win32` + Shell `powershell`, `pwsh`, or `cmd`** (OSTYPE not `msys`/`cygwin`):
+
+PowerShell auto-install is not yet supported. Skip writing the hook and tell the user:
+
+> ⚠ Stop hook auto-install is not yet supported on Windows PowerShell. To enable GitHub features (PR status / review inbox / announcement banner), install the hook manually using the snippet in the README's "GitHub workflow lines" section, or switch to Git Bash for setup.
+
+### Apply to settings.json
+
+Use the same merge-and-write pattern as Step 3 (same JSON-safety guarantees, same retry-on-conflict behavior). If `hooks` doesn't exist, create it as an empty object. If `hooks.Stop` doesn't exist, create it as an empty array.
+
+**Append** a new entry to `hooks.Stop[]` (do NOT replace or modify existing entries — the user may have other Stop hooks like GitKraken, language servers, or analytics tools that must be preserved):
+
+```json
+{
+  "matcher": "*",
+  "hooks": [
+    {
+      "type": "command",
+      "command": "{STOP_HOOK_COMMAND}"
+    }
+  ]
+}
+```
+
+### Confirm
+
+After successful write, append to the user-facing summary one of these:
+
+> ✅ Stop hook installed — GitHub PR status, review inbox, and announcement banner will auto-refresh on every Claude turn.
+
+Or if the idempotency check matched (already installed):
+
+> ✓ Stop hook was already installed — no changes made.
+
 
 After successfully writing the config, tell the user:
 
-> ✅ Config written. **Please restart Claude Code now** — quit and run `claude` again in your terminal.
+> ✅ Config written (statusLine and Stop hook). **Please restart Claude Code now** — quit and run `claude` again in your terminal.
 > Once restarted, run `/claude-hud:setup` again to complete Step 4 and verify the HUD is working.
 
 **Windows note**: Keep the restart guidance separate from runtime installation guidance.
