@@ -1,6 +1,6 @@
 import type { RenderContext } from '../../types.js';
 import type { CiCheckCounts, PrStatus, ShipVerdict } from '../../types.js';
-import { critical, dim, green, label, warning } from '../colors.js';
+import { critical, dim, green, label, project as projectColor, warning } from '../colors.js';
 import { formatReviewers } from '../../format/reviewers.js';
 import { glyphPair, joinGlyphPairs } from '../../format/glyph.js';
 
@@ -71,8 +71,8 @@ function buildPrLine(pr: PrStatus, ctx: RenderContext): string {
   const prTitle = truncateTitle(pr.title, 60);
   const draftSuffix = pr.draft ? dim(' (draft)') : '';
   const header = prTitle
-    ? `${label(prRef, colors)} ${prTitle}${draftSuffix}`
-    : `${label(prRef, colors)}${draftSuffix}`;
+    ? `${projectColor(prRef, colors)} ${prTitle}${draftSuffix}`
+    : `${projectColor(prRef, colors)}${draftSuffix}`;
   segments.push(header);
 
   const ciText = formatCiCounts(pr.ci, spacing, colors);
