@@ -25,7 +25,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const config = await loadConfig();
+  const config = await loadConfig(cwd);
   if (!config.github.enabled) {
     return;
   }

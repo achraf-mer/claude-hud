@@ -82,7 +82,7 @@ export async function main(overrides: Partial<MainDeps> = {}): Promise<void> {
     const { claudeMdCount, rulesCount, mcpCount, hooksCount, outputStyle } =
       await deps.countConfigs(stdin.cwd);
 
-    const config = await deps.loadConfig();
+    const config = await deps.loadConfig(stdin.cwd);
     setLanguage(config.language);
     const gitStatus = config.gitStatus.enabled
       ? await deps.getGitStatus(stdin.cwd)

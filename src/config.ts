@@ -723,18 +723,113 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
   return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, gitStatus, github, display, colors };
 }
 
-export async function loadConfig(): Promise<HudConfig> {
-  const configPath = getConfigPath();
-
+/**
+ * Walk up from `startDir` to find the nearest directory containing a
+ * `.git` entry (file or directory). Returns the absolute path to that
+ * directory, or null if no git repo is found before hitting the
+ * filesystem root.
+ */
+function findRepoRoot(startDir: string): string | null {
   try {
-    if (!fs.existsSync(configPath)) {
-      return mergeConfig({});
+    let current = path.resolve(startDir);
+    const root = path.parse(current).root;
+    while (current && current !== root) {
+      if (fs.existsSync(path.join(current, '.git'))) {
+        return current;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
     }
-
-    const content = fs.readFileSync(configPath, 'utf-8');
-    const userConfig = JSON.parse(content) as Partial<HudConfig>;
-    return mergeConfig(userConfig);
+    return null;
   } catch {
-    return mergeConfig({});
+    return null;
   }
+}
+
+/**
+ * Read a partial HudConfig from `<repo-root>/.claude-hud.json`. Returns
+ * an empty object on any failure (missing, malformed, unreadable).
+ */
+function loadRepoConfig(cwd: string): Partial<HudConfig> {
+  const repoRoot = findRepoRoot(cwd);
+  if (!repoRoot) return {};
+  const repoConfigPath = path.join(repoRoot, '.claude-hud.json');
+  try {
+    if (!fs.existsSync(repoConfigPath)) return {};
+    const content = fs.readFileSync(repoConfigPath, 'utf-8');
+    const parsed = JSON.parse(content);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed as Partial<HudConfig>;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Deep-merge `override` over `base`. Plain objects merge recursively,
+ * arrays and primitives are replaced. The output is a new object;
+ * inputs are not mutated.
+ */
+function deepMerge(
+  base: Record<string, unknown>,
+  override: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...base };
+  for (const key of Object.keys(override)) {
+    const overrideVal = override[key];
+    if (overrideVal === undefined) continue;
+    const baseVal = result[key];
+    const bothAreObjects =
+      overrideVal !== null && typeof overrideVal === 'object' && !Array.isArray(overrideVal) &&
+      baseVal !== null && typeof baseVal === 'object' && !Array.isArray(baseVal);
+    if (bothAreObjects) {
+      result[key] = deepMerge(
+        baseVal as Record<string, unknown>,
+        overrideVal as Record<string, unknown>,
+      );
+    } else {
+      result[key] = overrideVal;
+    }
+  }
+  return result;
+}
+
+function readUserConfig(): Partial<HudConfig> {
+  const configPath = getConfigPath();
+  try {
+    if (!fs.existsSync(configPath)) return {};
+    const content = fs.readFileSync(configPath, 'utf-8');
+    return JSON.parse(content) as Partial<HudConfig>;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolve the final HudConfig by layering:
+ *   1. defaults (in mergeConfig)
+ *   2. user global config (~/.claude/plugins/claude-hud/config.json)
+ *   3. per-repo config (<repo-root>/.claude-hud.json) — only when `cwd` is given
+ *
+ * Each layer deep-merges over the previous. Validation runs once on the
+ * final composite so any layer can violate constraints without
+ * corrupting the result.
+ */
+export async function loadConfig(cwd?: string): Promise<HudConfig> {
+  const userConfig = readUserConfig();
+  if (!cwd) {
+    return mergeConfig(userConfig);
+  }
+  const repoConfig = loadRepoConfig(cwd);
+  if (Object.keys(repoConfig).length === 0) {
+    return mergeConfig(userConfig);
+  }
+  const merged = deepMerge(
+    userConfig as Record<string, unknown>,
+    repoConfig as Record<string, unknown>,
+  );
+  return mergeConfig(merged as Partial<HudConfig>);
 }
