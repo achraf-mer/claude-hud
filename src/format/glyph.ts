@@ -1,25 +1,37 @@
 import type { GlyphSpacingMode } from '../config.js';
 
+const WIDE_GLYPH_PATTERN = /\p{Extended_Pictographic}/u;
+
 /**
- * Pad a status glyph (✓ ✗ ◐ ↑ ↓ ⚠ ↻ etc.) against adjacent content based on
- * the HUD-wide `display.glyphSpacing` setting.
+ * True when the glyph is rendered double-width in most terminal fonts —
+ * primarily emoji (💬, 🚨, etc.). These glyphs already carry visible
+ * right-side padding, so a single space against adjacent text looks
+ * cramped compared to narrow glyphs like ✓ ◐ ↑. We add one extra space
+ * to wide glyphs to balance the visual gap.
+ */
+function isWideGlyph(glyph: string): boolean {
+  return WIDE_GLYPH_PATTERN.test(glyph);
+}
+
+/**
+ * Pad a status glyph against adjacent content based on the HUD-wide
+ * `display.glyphSpacing` setting. Wide glyphs (emoji) get one extra
+ * space in every mode to compensate for their built-in right padding.
  *
- *   tight  → "✓alice"      (no space; relies on color)
- *   normal → "✓ alice"     (single space; default)
- *   loose  → "✓  alice"    (double space; max breathing room)
- *
- * The helper is used wherever a glyph butts against text so spacing stays
- * consistent across renderers without each one re-implementing the rule.
+ *   tight  + narrow → "✓alice"     | tight  + wide → "💬 alice"
+ *   normal + narrow → "✓ alice"    | normal + wide → "💬  alice"
+ *   loose  + narrow → "✓  alice"   | loose  + wide → "💬   alice"
  */
 export function glyphPair(glyph: string, content: string, spacing: GlyphSpacingMode): string {
+  const wide = isWideGlyph(glyph);
   switch (spacing) {
     case 'tight':
-      return `${glyph}${content}`;
+      return wide ? `${glyph} ${content}` : `${glyph}${content}`;
     case 'loose':
-      return `${glyph}  ${content}`;
+      return wide ? `${glyph}   ${content}` : `${glyph}  ${content}`;
     case 'normal':
     default:
-      return `${glyph} ${content}`;
+      return wide ? `${glyph}  ${content}` : `${glyph} ${content}`;
   }
 }
 
