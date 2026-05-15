@@ -20,7 +20,9 @@ export type GitBranchOverflowMode = 'truncate' | 'wrap';
  */
 export type ModelFormatMode = 'full' | 'compact' | 'short';
 export type TimeFormatMode = 'relative' | 'absolute' | 'both';
-export type HudElement = 'project' | 'addedDirs' | 'context' | 'usage' | 'promptCache' | 'memory' | 'environment' | 'tools' | 'agents' | 'todos' | 'sessionTime';
+export type GlyphSpacingMode = 'tight' | 'normal' | 'loose';
+export type ReviewerStyleMode = 'auto' | 'names' | 'counts';
+export type HudElement = 'project' | 'addedDirs' | 'context' | 'usage' | 'promptCache' | 'memory' | 'environment' | 'tools' | 'agents' | 'todos' | 'sessionTime' | 'prStatus' | 'reviewInbox' | 'announcement';
 
 export type AddedDirsLayout = 'inline' | 'line';
 export type HudColorName =
@@ -53,6 +55,7 @@ export interface HudColorOverrides {
 }
 
 export const DEFAULT_ELEMENT_ORDER: HudElement[] = [
+  'announcement',
   'project',
   'addedDirs',
   'context',
@@ -60,6 +63,8 @@ export const DEFAULT_ELEMENT_ORDER: HudElement[] = [
   'promptCache',
   'memory',
   'environment',
+  'prStatus',
+  'reviewInbox',
   'tools',
   'agents',
   'todos',
@@ -71,6 +76,51 @@ export const DEFAULT_MERGE_GROUPS: HudElement[][] = [
 ];
 
 const KNOWN_ELEMENTS = new Set<HudElement>(DEFAULT_ELEMENT_ORDER);
+
+export interface GithubReviewsConfig {
+  /** How reviewer status is rendered. `auto` shows names when ≤ maxNames, counts otherwise. */
+  style: ReviewerStyleMode;
+  maxNames: number;
+  filterBots: boolean;
+  /** Surface a stale glyph (↻) when a reviewer reviewed before subsequent commits. */
+  showStale: boolean;
+}
+
+export type InboxScopeMode = 'current-repo' | 'all';
+
+export interface GithubInboxConfig {
+  enabled: boolean;
+  /**
+   * Which PRs the inbox includes:
+   *   "current-repo" — only PRs in the same repo as the cwd (default)
+   *   "all"          — every PR awaiting your review across all repos
+   */
+  scope: InboxScopeMode;
+  /** Show author logins vs. just the count. */
+  showAuthors: boolean;
+  /** Max items to list before truncating to `+N`. */
+  maxItems: number;
+}
+
+export interface GithubAnnouncementsConfig {
+  enabled: boolean;
+  /** Issue label that flags an item as an announcement. */
+  label: string;
+  /** Also include the repo's pinned issues even without the label. */
+  includePinned: boolean;
+  /** Max announcements to render. */
+  maxItems: number;
+}
+
+export interface GithubConfig {
+  enabled: boolean;
+  /** Absolute path to the PR snapshot JSON written by the refresher binary. */
+  snapshotPath: string;
+  snapshotMaxAgeMs: number;
+  reviews: GithubReviewsConfig;
+  inbox: GithubInboxConfig;
+  announcements: GithubAnnouncementsConfig;
+}
 
 export interface HudConfig {
   language: Language;
@@ -89,6 +139,7 @@ export interface HudConfig {
     pushWarningThreshold: number;
     pushCriticalThreshold: number;
   };
+  github: GithubConfig;
   display: {
     showModel: boolean;
     showProject: boolean;
@@ -132,6 +183,8 @@ export interface HudConfig {
     modelOverride: string;
     customLine: string;
     timeFormat: TimeFormatMode;
+    /** Controls space between status glyphs (✓ ✗ ◐ ↑ ↓ etc.) and adjacent content. */
+    glyphSpacing: GlyphSpacingMode;
   };
   colors: HudColorOverrides;
 }
@@ -152,6 +205,29 @@ export const DEFAULT_CONFIG: HudConfig = {
     branchOverflow: 'truncate',
     pushWarningThreshold: 0,
     pushCriticalThreshold: 0,
+  },
+  github: {
+    enabled: true,
+    snapshotPath: '',
+    snapshotMaxAgeMs: 300000,
+    reviews: {
+      style: 'auto',
+      maxNames: 4,
+      filterBots: true,
+      showStale: true,
+    },
+    inbox: {
+      enabled: true,
+      scope: 'current-repo',
+      showAuthors: true,
+      maxItems: 4,
+    },
+    announcements: {
+      enabled: true,
+      label: 'announcement',
+      includePinned: true,
+      maxItems: 3,
+    },
   },
   display: {
     showModel: true,
@@ -196,6 +272,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     modelOverride: '',
     customLine: '',
     timeFormat: 'relative',
+    glyphSpacing: 'normal',
   },
   colors: {
     context: 'green',
@@ -253,6 +330,74 @@ function validateModelFormat(value: unknown): value is ModelFormatMode {
 
 function validateTimeFormat(value: unknown): value is TimeFormatMode {
   return value === 'relative' || value === 'absolute' || value === 'both';
+}
+
+function validateGlyphSpacing(value: unknown): value is GlyphSpacingMode {
+  return value === 'tight' || value === 'normal' || value === 'loose';
+}
+
+function validateReviewerStyle(value: unknown): value is ReviewerStyleMode {
+  return value === 'auto' || value === 'names' || value === 'counts';
+}
+
+function validateInboxScope(value: unknown): value is InboxScopeMode {
+  return value === 'current-repo' || value === 'all';
+}
+
+function validatePositiveCount(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
+function mergeGithubConfig(value: unknown): GithubConfig {
+  const fallback = DEFAULT_CONFIG.github;
+  if (!value || typeof value !== 'object') {
+    return {
+      enabled: fallback.enabled,
+      snapshotPath: fallback.snapshotPath,
+      snapshotMaxAgeMs: fallback.snapshotMaxAgeMs,
+      reviews: { ...fallback.reviews },
+      inbox: { ...fallback.inbox },
+      announcements: { ...fallback.announcements },
+    };
+  }
+
+  const raw = value as Partial<GithubConfig> & {
+    reviews?: Partial<GithubReviewsConfig>;
+    inbox?: Partial<GithubInboxConfig>;
+    announcements?: Partial<GithubAnnouncementsConfig>;
+  };
+  const reviewsRaw: Partial<GithubReviewsConfig> = raw.reviews ?? {};
+  const inboxRaw: Partial<GithubInboxConfig> = raw.inbox ?? {};
+  const announcementsRaw: Partial<GithubAnnouncementsConfig> = raw.announcements ?? {};
+
+  return {
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : fallback.enabled,
+    snapshotPath: typeof raw.snapshotPath === 'string' ? raw.snapshotPath.trim() : fallback.snapshotPath,
+    snapshotMaxAgeMs: validateFreshnessMs(raw.snapshotMaxAgeMs),
+    reviews: {
+      style: validateReviewerStyle(reviewsRaw.style) ? reviewsRaw.style : fallback.reviews.style,
+      maxNames: validatePositiveCount(reviewsRaw.maxNames, fallback.reviews.maxNames),
+      filterBots: typeof reviewsRaw.filterBots === 'boolean' ? reviewsRaw.filterBots : fallback.reviews.filterBots,
+      showStale: typeof reviewsRaw.showStale === 'boolean' ? reviewsRaw.showStale : fallback.reviews.showStale,
+    },
+    inbox: {
+      enabled: typeof inboxRaw.enabled === 'boolean' ? inboxRaw.enabled : fallback.inbox.enabled,
+      scope: validateInboxScope(inboxRaw.scope) ? inboxRaw.scope : fallback.inbox.scope,
+      showAuthors: typeof inboxRaw.showAuthors === 'boolean' ? inboxRaw.showAuthors : fallback.inbox.showAuthors,
+      maxItems: validatePositiveCount(inboxRaw.maxItems, fallback.inbox.maxItems),
+    },
+    announcements: {
+      enabled: typeof announcementsRaw.enabled === 'boolean' ? announcementsRaw.enabled : fallback.announcements.enabled,
+      label: typeof announcementsRaw.label === 'string' && announcementsRaw.label.trim()
+        ? announcementsRaw.label.trim().slice(0, 64)
+        : fallback.announcements.label,
+      includePinned: typeof announcementsRaw.includePinned === 'boolean' ? announcementsRaw.includePinned : fallback.announcements.includePinned,
+      maxItems: validatePositiveCount(announcementsRaw.maxItems, fallback.announcements.maxItems),
+    },
+  };
 }
 
 function validateColorName(value: unknown): value is HudColorName {
@@ -594,7 +739,12 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
     timeFormat: validateTimeFormat(migrated.display?.timeFormat)
       ? migrated.display.timeFormat
       : DEFAULT_CONFIG.display.timeFormat,
+    glyphSpacing: validateGlyphSpacing(migrated.display?.glyphSpacing)
+      ? migrated.display.glyphSpacing
+      : DEFAULT_CONFIG.display.glyphSpacing,
   };
+
+  const github = mergeGithubConfig((migrated as Record<string, unknown>).github);
 
   const colors = {
     context: validateColorValue(migrated.colors?.context)
@@ -638,21 +788,116 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
       : DEFAULT_CONFIG.colors.barEmpty,
   };
 
-  return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, gitStatus, display, colors };
+  return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, gitStatus, github, display, colors };
 }
 
-export async function loadConfig(): Promise<HudConfig> {
-  const configPath = getConfigPath();
-
+/**
+ * Walk up from `startDir` to find the nearest directory containing a
+ * `.git` entry (file or directory). Returns the absolute path to that
+ * directory, or null if no git repo is found before hitting the
+ * filesystem root.
+ */
+function findRepoRoot(startDir: string): string | null {
   try {
-    if (!fs.existsSync(configPath)) {
-      return mergeConfig({});
+    let current = path.resolve(startDir);
+    const root = path.parse(current).root;
+    while (current && current !== root) {
+      if (fs.existsSync(path.join(current, '.git'))) {
+        return current;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
     }
-
-    const content = fs.readFileSync(configPath, 'utf-8');
-    const userConfig = JSON.parse(content) as Partial<HudConfig>;
-    return mergeConfig(userConfig);
+    return null;
   } catch {
-    return mergeConfig({});
+    return null;
   }
+}
+
+/**
+ * Read a partial HudConfig from `<repo-root>/.claude-hud.json`. Returns
+ * an empty object on any failure (missing, malformed, unreadable).
+ */
+function loadRepoConfig(cwd: string): Partial<HudConfig> {
+  const repoRoot = findRepoRoot(cwd);
+  if (!repoRoot) return {};
+  const repoConfigPath = path.join(repoRoot, '.claude-hud.json');
+  try {
+    if (!fs.existsSync(repoConfigPath)) return {};
+    const content = fs.readFileSync(repoConfigPath, 'utf-8');
+    const parsed = JSON.parse(content);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed as Partial<HudConfig>;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Deep-merge `override` over `base`. Plain objects merge recursively,
+ * arrays and primitives are replaced. The output is a new object;
+ * inputs are not mutated.
+ */
+function deepMerge(
+  base: Record<string, unknown>,
+  override: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...base };
+  for (const key of Object.keys(override)) {
+    const overrideVal = override[key];
+    if (overrideVal === undefined) continue;
+    const baseVal = result[key];
+    const bothAreObjects =
+      overrideVal !== null && typeof overrideVal === 'object' && !Array.isArray(overrideVal) &&
+      baseVal !== null && typeof baseVal === 'object' && !Array.isArray(baseVal);
+    if (bothAreObjects) {
+      result[key] = deepMerge(
+        baseVal as Record<string, unknown>,
+        overrideVal as Record<string, unknown>,
+      );
+    } else {
+      result[key] = overrideVal;
+    }
+  }
+  return result;
+}
+
+function readUserConfig(): Partial<HudConfig> {
+  const configPath = getConfigPath();
+  try {
+    if (!fs.existsSync(configPath)) return {};
+    const content = fs.readFileSync(configPath, 'utf-8');
+    return JSON.parse(content) as Partial<HudConfig>;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolve the final HudConfig by layering:
+ *   1. defaults (in mergeConfig)
+ *   2. user global config (~/.claude/plugins/claude-hud/config.json)
+ *   3. per-repo config (<repo-root>/.claude-hud.json) — only when `cwd` is given
+ *
+ * Each layer deep-merges over the previous. Validation runs once on the
+ * final composite so any layer can violate constraints without
+ * corrupting the result.
+ */
+export async function loadConfig(cwd?: string): Promise<HudConfig> {
+  const userConfig = readUserConfig();
+  if (!cwd) {
+    return mergeConfig(userConfig);
+  }
+  const repoConfig = loadRepoConfig(cwd);
+  if (Object.keys(repoConfig).length === 0) {
+    return mergeConfig(userConfig);
+  }
+  const merged = deepMerge(
+    userConfig as Record<string, unknown>,
+    repoConfig as Record<string, unknown>,
+  );
+  return mergeConfig(merged as Partial<HudConfig>);
 }

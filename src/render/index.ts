@@ -16,6 +16,9 @@ import {
   renderMemoryLine,
   renderSessionTokensLine,
   renderSessionTimeLine,
+  renderPrStatusLine,
+  renderReviewInboxLine,
+  renderAnnouncementLine,
 } from './lines/index.js';
 import { dim, RESET } from './colors.js';
 import { getTerminalWidth, UNKNOWN_TERMINAL_WIDTH } from '../utils/terminal.js';
@@ -378,6 +381,12 @@ function renderElementLine(
       return display?.showTodos === false ? null : renderTodosLine(ctx);
     case 'sessionTime':
       return renderSessionTimeLine(ctx);
+    case 'prStatus':
+      return renderPrStatusLine(ctx);
+    case 'reviewInbox':
+      return renderReviewInboxLine(ctx);
+    case 'announcement':
+      return renderAnnouncementLine(ctx);
   }
 }
 

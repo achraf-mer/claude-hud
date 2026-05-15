@@ -8,6 +8,7 @@ import { git as gitColor, gitBranch as gitBranchColor, warning as warningColor, 
 import { t } from '../../i18n/index.js';
 import { renderCostEstimate } from './cost.js';
 import { normalizeAddedDirs, sanitize as sanitizeDisplayText, basenameOf, truncateBasename, MAX_RENDERED_ADDED_DIRS } from './added-dirs.js';
+import { glyphPair } from '../../format/glyph.js';
 
 function hyperlink(uri: string, text: string): string {
   const esc = '\x1b';
@@ -108,10 +109,13 @@ export function renderProjectLine(ctx: RenderContext): string | null {
     const gitInner: string[] = [linkedBranch];
 
     if (gitConfig?.showAheadBehind) {
+      const spacing = ctx.config?.display?.glyphSpacing ?? 'normal';
       if (ctx.gitStatus.ahead > 0) {
-        gitInner.push(formatAheadCount(ctx.gitStatus.ahead, gitConfig, colors));
+        gitInner.push(formatAheadCount(ctx.gitStatus.ahead, gitConfig, colors, spacing));
       }
-      if (ctx.gitStatus.behind > 0) gitInner.push(gitBranchColor(`↓${ctx.gitStatus.behind}`, colors));
+      if (ctx.gitStatus.behind > 0) {
+        gitInner.push(gitBranchColor(glyphPair('↓', String(ctx.gitStatus.behind), spacing), colors));
+      }
     }
 
     if (gitConfig?.showFileStats && ctx.gitStatus.lineDiff) {
@@ -188,8 +192,9 @@ function formatAheadCount(
   ahead: number,
   gitConfig: RenderContext['config']['gitStatus'] | undefined,
   colors: RenderContext['config']['colors'] | undefined,
+  spacing: RenderContext['config']['display']['glyphSpacing'] = 'normal',
 ): string {
-  const value = `↑${ahead}`;
+  const value = glyphPair('↑', String(ahead), spacing);
   const criticalThreshold = gitConfig?.pushCriticalThreshold ?? 0;
   const warningThreshold = gitConfig?.pushWarningThreshold ?? 0;
 
