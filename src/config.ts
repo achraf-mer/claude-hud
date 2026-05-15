@@ -22,7 +22,7 @@ export type ModelFormatMode = 'full' | 'compact' | 'short';
 export type TimeFormatMode = 'relative' | 'absolute' | 'both';
 export type GlyphSpacingMode = 'tight' | 'normal' | 'loose';
 export type ReviewerStyleMode = 'auto' | 'names' | 'counts';
-export type HudElement = 'project' | 'addedDirs' | 'context' | 'usage' | 'promptCache' | 'memory' | 'environment' | 'tools' | 'agents' | 'todos' | 'sessionTime' | 'prStatus';
+export type HudElement = 'project' | 'addedDirs' | 'context' | 'usage' | 'promptCache' | 'memory' | 'environment' | 'tools' | 'agents' | 'todos' | 'sessionTime' | 'prStatus' | 'reviewInbox' | 'announcement';
 
 export type AddedDirsLayout = 'inline' | 'line';
 export type HudColorName =
@@ -55,6 +55,7 @@ export interface HudColorOverrides {
 }
 
 export const DEFAULT_ELEMENT_ORDER: HudElement[] = [
+  'announcement',
   'project',
   'addedDirs',
   'context',
@@ -63,6 +64,7 @@ export const DEFAULT_ELEMENT_ORDER: HudElement[] = [
   'memory',
   'environment',
   'prStatus',
+  'reviewInbox',
   'tools',
   'agents',
   'todos',
@@ -84,12 +86,40 @@ export interface GithubReviewsConfig {
   showStale: boolean;
 }
 
+export type InboxScopeMode = 'current-repo' | 'all';
+
+export interface GithubInboxConfig {
+  enabled: boolean;
+  /**
+   * Which PRs the inbox includes:
+   *   "current-repo" — only PRs in the same repo as the cwd (default)
+   *   "all"          — every PR awaiting your review across all repos
+   */
+  scope: InboxScopeMode;
+  /** Show author logins vs. just the count. */
+  showAuthors: boolean;
+  /** Max items to list before truncating to `+N`. */
+  maxItems: number;
+}
+
+export interface GithubAnnouncementsConfig {
+  enabled: boolean;
+  /** Issue label that flags an item as an announcement. */
+  label: string;
+  /** Also include the repo's pinned issues even without the label. */
+  includePinned: boolean;
+  /** Max announcements to render. */
+  maxItems: number;
+}
+
 export interface GithubConfig {
   enabled: boolean;
   /** Absolute path to the PR snapshot JSON written by the refresher binary. */
   snapshotPath: string;
   snapshotMaxAgeMs: number;
   reviews: GithubReviewsConfig;
+  inbox: GithubInboxConfig;
+  announcements: GithubAnnouncementsConfig;
 }
 
 export interface HudConfig {
@@ -185,6 +215,18 @@ export const DEFAULT_CONFIG: HudConfig = {
       maxNames: 4,
       filterBots: true,
       showStale: true,
+    },
+    inbox: {
+      enabled: true,
+      scope: 'current-repo',
+      showAuthors: true,
+      maxItems: 4,
+    },
+    announcements: {
+      enabled: true,
+      label: 'announcement',
+      includePinned: true,
+      maxItems: 3,
     },
   },
   display: {
@@ -298,6 +340,10 @@ function validateReviewerStyle(value: unknown): value is ReviewerStyleMode {
   return value === 'auto' || value === 'names' || value === 'counts';
 }
 
+function validateInboxScope(value: unknown): value is InboxScopeMode {
+  return value === 'current-repo' || value === 'all';
+}
+
 function validatePositiveCount(value: unknown, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
     return fallback;
@@ -313,11 +359,19 @@ function mergeGithubConfig(value: unknown): GithubConfig {
       snapshotPath: fallback.snapshotPath,
       snapshotMaxAgeMs: fallback.snapshotMaxAgeMs,
       reviews: { ...fallback.reviews },
+      inbox: { ...fallback.inbox },
+      announcements: { ...fallback.announcements },
     };
   }
 
-  const raw = value as Partial<GithubConfig> & { reviews?: Partial<GithubReviewsConfig> };
+  const raw = value as Partial<GithubConfig> & {
+    reviews?: Partial<GithubReviewsConfig>;
+    inbox?: Partial<GithubInboxConfig>;
+    announcements?: Partial<GithubAnnouncementsConfig>;
+  };
   const reviewsRaw: Partial<GithubReviewsConfig> = raw.reviews ?? {};
+  const inboxRaw: Partial<GithubInboxConfig> = raw.inbox ?? {};
+  const announcementsRaw: Partial<GithubAnnouncementsConfig> = raw.announcements ?? {};
 
   return {
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : fallback.enabled,
@@ -328,6 +382,20 @@ function mergeGithubConfig(value: unknown): GithubConfig {
       maxNames: validatePositiveCount(reviewsRaw.maxNames, fallback.reviews.maxNames),
       filterBots: typeof reviewsRaw.filterBots === 'boolean' ? reviewsRaw.filterBots : fallback.reviews.filterBots,
       showStale: typeof reviewsRaw.showStale === 'boolean' ? reviewsRaw.showStale : fallback.reviews.showStale,
+    },
+    inbox: {
+      enabled: typeof inboxRaw.enabled === 'boolean' ? inboxRaw.enabled : fallback.inbox.enabled,
+      scope: validateInboxScope(inboxRaw.scope) ? inboxRaw.scope : fallback.inbox.scope,
+      showAuthors: typeof inboxRaw.showAuthors === 'boolean' ? inboxRaw.showAuthors : fallback.inbox.showAuthors,
+      maxItems: validatePositiveCount(inboxRaw.maxItems, fallback.inbox.maxItems),
+    },
+    announcements: {
+      enabled: typeof announcementsRaw.enabled === 'boolean' ? announcementsRaw.enabled : fallback.announcements.enabled,
+      label: typeof announcementsRaw.label === 'string' && announcementsRaw.label.trim()
+        ? announcementsRaw.label.trim().slice(0, 64)
+        : fallback.announcements.label,
+      includePinned: typeof announcementsRaw.includePinned === 'boolean' ? announcementsRaw.includePinned : fallback.announcements.includePinned,
+      maxItems: validatePositiveCount(announcementsRaw.maxItems, fallback.announcements.maxItems),
     },
   };
 }

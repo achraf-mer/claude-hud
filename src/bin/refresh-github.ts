@@ -32,7 +32,11 @@ async function main(): Promise<void> {
 
   let snapshot: PrSnapshot;
   try {
-    snapshot = await fetchPrSnapshot({ cwd });
+    snapshot = await fetchPrSnapshot({
+      cwd,
+      inboxConfig: config.github.inbox,
+      announcementsConfig: config.github.announcements,
+    });
   } catch {
     return;
   }

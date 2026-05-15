@@ -5,7 +5,11 @@ import { createHash } from 'node:crypto';
 import { getHudPluginDir } from './claude-config-dir.js';
 import type { HudConfig } from './config.js';
 import type {
+  AnnouncementItem,
+  AnnouncementSeverity,
+  AnnouncementSource,
   CiCheckCounts,
+  InboxItem,
   PrSnapshot,
   PrSnapshotError,
   PrStatus,
@@ -42,6 +46,46 @@ const VALID_ERRORS = new Set<PrSnapshotError>([
   'fetch-failed',
   'no-remote',
 ]);
+
+const VALID_SEVERITIES = new Set<AnnouncementSeverity>(['info', 'warning', 'critical']);
+const VALID_ANN_SOURCES = new Set<AnnouncementSource>(['pinned-issue', 'labeled-issue']);
+
+function parseInboxItem(raw: unknown): InboxItem | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const number = nonNegativeInt(obj.number);
+  if (number <= 0) return null;
+  return {
+    number,
+    title: asString(obj.title),
+    url: asString(obj.url),
+    author: asString(obj.author),
+    repoOwner: asString(obj.repoOwner),
+    repoName: asString(obj.repoName),
+    updatedAt: asString(obj.updatedAt),
+  };
+}
+
+function parseAnnouncementItem(raw: unknown): AnnouncementItem | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const number = nonNegativeInt(obj.number);
+  if (number <= 0) return null;
+  const severity = VALID_SEVERITIES.has(obj.severity as AnnouncementSeverity)
+    ? (obj.severity as AnnouncementSeverity)
+    : 'info';
+  const source = VALID_ANN_SOURCES.has(obj.source as AnnouncementSource)
+    ? (obj.source as AnnouncementSource)
+    : 'labeled-issue';
+  return {
+    number,
+    title: asString(obj.title),
+    url: asString(obj.url),
+    severity,
+    source,
+    updatedAt: asString(obj.updatedAt),
+  };
+}
 
 /**
  * Per-cwd snapshot path. Two Claude Code sessions in different working
@@ -254,6 +298,17 @@ export function loadPrSnapshot(
     branch,
     pr: parsePr(obj.pr),
   };
+
+  if (Array.isArray(obj.inbox)) {
+    const inbox = obj.inbox.map(parseInboxItem).filter((i): i is InboxItem => i !== null);
+    if (inbox.length > 0) snapshot.inbox = inbox;
+  }
+  if (Array.isArray(obj.announcements)) {
+    const announcements = obj.announcements
+      .map(parseAnnouncementItem)
+      .filter((a): a is AnnouncementItem => a !== null);
+    if (announcements.length > 0) snapshot.announcements = announcements;
+  }
   if (error) {
     snapshot.error = error;
   }

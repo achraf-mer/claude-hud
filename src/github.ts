@@ -1,7 +1,10 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
+  AnnouncementItem,
+  AnnouncementSeverity,
   CiCheckCounts,
+  InboxItem,
   PrSnapshot,
   PrSnapshotError,
   PrStatus,
@@ -10,6 +13,7 @@ import type {
   ShipVerdict,
 } from './types.js';
 import { isBot } from './format/reviewers.js';
+import type { GithubAnnouncementsConfig, GithubInboxConfig } from './config.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +22,10 @@ const DEFAULT_TIMEOUT_MS = 10000;
 export interface FetchOptions {
   cwd: string;
   timeoutMs?: number;
+  /** When provided, also fetch the user's review inbox into snapshot.inbox. */
+  inboxConfig?: GithubInboxConfig;
+  /** When provided, also fetch repo announcements into snapshot.announcements. */
+  announcementsConfig?: GithubAnnouncementsConfig;
 }
 
 interface GhPrView {
@@ -84,20 +92,37 @@ export async function fetchPrSnapshot(opts: FetchOptions): Promise<PrSnapshot> {
     return baseSnapshot(updatedAt, repo, branch, 'gh-unauthed');
   }
 
+  // Inbox + announcements are fetched in parallel with PR view so the
+  // total wall-time of the refresh is bounded by the slowest single call,
+  // not the sum.
+  const inboxPromise = opts.inboxConfig?.enabled
+    ? fetchInbox(cwd, repo, opts.inboxConfig, timeoutMs).catch(() => [])
+    : Promise.resolve<InboxItem[]>([]);
+  const announcementsPromise = opts.announcementsConfig?.enabled
+    ? fetchAnnouncements(cwd, repo, opts.announcementsConfig, timeoutMs).catch(() => [])
+    : Promise.resolve<AnnouncementItem[]>([]);
+
+  const buildResult = (snapshot: PrSnapshot): Promise<PrSnapshot> =>
+    Promise.all([inboxPromise, announcementsPromise]).then(([inbox, announcements]) => {
+      if (inbox.length > 0) snapshot.inbox = inbox;
+      if (announcements.length > 0) snapshot.announcements = announcements;
+      return snapshot;
+    });
+
   if (!branch) {
-    return baseSnapshot(updatedAt, repo, null, 'no-pr');
+    return buildResult(baseSnapshot(updatedAt, repo, null, 'no-pr'));
   }
 
   const view = await getPrViewForBranch(cwd, repo, branch, timeoutMs);
   if (view === null) {
-    return baseSnapshot(updatedAt, repo, branch, 'fetch-failed');
+    return buildResult(baseSnapshot(updatedAt, repo, branch, 'fetch-failed'));
   }
   if (view === 'no-pr') {
-    return baseSnapshot(updatedAt, repo, branch, 'no-pr');
+    return buildResult(baseSnapshot(updatedAt, repo, branch, 'no-pr'));
   }
 
   const pr = buildPrStatus(view);
-  return { updatedAt, repo, branch, pr };
+  return buildResult({ updatedAt, repo, branch, pr });
 }
 
 function baseSnapshot(
@@ -379,6 +404,197 @@ function computeShipVerdict(view: GhPrView, reviewers: ReviewerStatus[], ci: CiC
     return { verdict: 'warning', reason: 'awaiting review' };
   }
   return { verdict: 'ready' };
+}
+
+interface GhInboxRow {
+  number?: number;
+  title?: string;
+  url?: string;
+  updatedAt?: string;
+  author?: { login?: string };
+  repository?: { name?: string; nameWithOwner?: string };
+}
+
+/**
+ * Fetch PRs awaiting the authenticated user's review. Scope determines
+ * whether we limit to the current repo (default) or include every repo.
+ */
+async function fetchInbox(
+  cwd: string,
+  repo: NonNullable<PrSnapshot['repo']>,
+  config: GithubInboxConfig,
+  timeoutMs: number,
+): Promise<InboxItem[]> {
+  const args = [
+    'search',
+    'prs',
+    '--review-requested=@me',
+    '--state=open',
+    '--limit',
+    '20',
+    '--json',
+    'number,title,url,updatedAt,author,repository',
+  ];
+  if (config.scope === 'current-repo') {
+    args.push('--repo', `${repo.owner}/${repo.name}`);
+  }
+  try {
+    const { stdout } = await execFileAsync(
+      'gh',
+      args,
+      { cwd, timeout: timeoutMs, encoding: 'utf8' },
+    );
+    const rows = JSON.parse(stdout) as GhInboxRow[];
+    if (!Array.isArray(rows)) return [];
+    const items: InboxItem[] = [];
+    for (const row of rows) {
+      if (typeof row.number !== 'number') continue;
+      const author = row.author?.login?.trim() ?? '';
+      const nameWithOwner = row.repository?.nameWithOwner ?? '';
+      const [owner = '', name = row.repository?.name ?? ''] = nameWithOwner.split('/');
+      items.push({
+        number: row.number,
+        title: row.title ?? '',
+        url: row.url ?? '',
+        author,
+        repoOwner: owner,
+        repoName: name,
+        updatedAt: row.updatedAt ?? '',
+      });
+    }
+    return items;
+  } catch {
+    return [];
+  }
+}
+
+const ANNOUNCEMENT_GRAPHQL = `
+query($owner: String!, $name: String!, $label: String!, $maxItems: Int!) {
+  repository(owner: $owner, name: $name) {
+    pinnedIssues(first: 3) {
+      nodes {
+        issue {
+          number
+          title
+          url
+          updatedAt
+          state
+          labels(first: 10) { nodes { name } }
+        }
+      }
+    }
+    issues(states: OPEN, labels: [$label], first: $maxItems, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number
+        title
+        url
+        updatedAt
+        labels(first: 10) { nodes { name } }
+      }
+    }
+  }
+}
+`;
+
+interface GhIssueNode {
+  number?: number;
+  title?: string;
+  url?: string;
+  updatedAt?: string;
+  state?: string;
+  labels?: { nodes?: Array<{ name?: string }> };
+}
+
+interface GhAnnouncementsResponse {
+  data?: {
+    repository?: {
+      pinnedIssues?: { nodes?: Array<{ issue?: GhIssueNode }> };
+      issues?: { nodes?: GhIssueNode[] };
+    };
+  };
+}
+
+/**
+ * Fetch active announcements for the current repo. Combines pinned
+ * issues + issues with the configured label in one GraphQL call, then
+ * dedupes and classifies severity from `severity:*` labels.
+ */
+async function fetchAnnouncements(
+  cwd: string,
+  repo: NonNullable<PrSnapshot['repo']>,
+  config: GithubAnnouncementsConfig,
+  timeoutMs: number,
+): Promise<AnnouncementItem[]> {
+  try {
+    const { stdout } = await execFileAsync(
+      'gh',
+      [
+        'api',
+        'graphql',
+        '-f', `query=${ANNOUNCEMENT_GRAPHQL}`,
+        '-F', `owner=${repo.owner}`,
+        '-F', `name=${repo.name}`,
+        '-F', `label=${config.label}`,
+        '-F', `maxItems=${Math.max(1, config.maxItems)}`,
+      ],
+      { cwd, timeout: timeoutMs, encoding: 'utf8' },
+    );
+    const response = JSON.parse(stdout) as GhAnnouncementsResponse;
+    const repository = response.data?.repository;
+    if (!repository) return [];
+
+    const pinnedNodes = (repository.pinnedIssues?.nodes ?? [])
+      .map((n) => n.issue)
+      .filter((i): i is GhIssueNode => i !== undefined && i !== null);
+    const labeledNodes = repository.issues?.nodes ?? [];
+
+    const items: AnnouncementItem[] = [];
+    const seen = new Set<number>();
+
+    const addNode = (node: GhIssueNode, source: AnnouncementItem['source']) => {
+      if (typeof node.number !== 'number') return;
+      if (seen.has(node.number)) return;
+      // Only include open issues — pinnedIssues nodes can include closed ones.
+      if (node.state && node.state !== 'OPEN') return;
+      seen.add(node.number);
+      items.push({
+        number: node.number,
+        title: node.title ?? '',
+        url: node.url ?? '',
+        severity: extractSeverity(node.labels?.nodes ?? []),
+        source,
+        updatedAt: node.updatedAt ?? '',
+      });
+    };
+
+    // Pinned first (typically more important); labeled fills in remaining slots.
+    if (config.includePinned) {
+      for (const node of pinnedNodes) addNode(node, 'pinned-issue');
+    }
+    for (const node of labeledNodes) addNode(node, 'labeled-issue');
+
+    // Sort by severity (critical → warning → info), then by recency.
+    const severityRank: Record<AnnouncementSeverity, number> = { critical: 0, warning: 1, info: 2 };
+    items.sort((a, b) => {
+      const s = severityRank[a.severity] - severityRank[b.severity];
+      if (s !== 0) return s;
+      return (b.updatedAt || '').localeCompare(a.updatedAt || '');
+    });
+
+    return items.slice(0, Math.max(1, config.maxItems));
+  } catch {
+    return [];
+  }
+}
+
+function extractSeverity(labels: Array<{ name?: string }>): AnnouncementSeverity {
+  for (const label of labels) {
+    const name = label.name?.toLowerCase().trim() ?? '';
+    if (name === 'severity:critical' || name === 'critical') return 'critical';
+    if (name === 'severity:warning' || name === 'warning') return 'warning';
+    if (name === 'severity:info' || name === 'info') return 'info';
+  }
+  return 'info';
 }
 
 function buildPrStatus(view: GhPrView): PrStatus {

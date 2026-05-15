@@ -99,16 +99,31 @@ Context █████░░░░░ 45% │ Usage ██░░░░░░░
 ▸ Fix authentication bug (2/5)                   ← Todo progress
 ```
 
-### GitHub workflow line (opt-in, requires `gh` CLI)
+### GitHub workflow lines (opt-in, requires `gh` CLI)
 
-When enabled, the HUD shows live PR status for the current branch:
+When enabled, the HUD adds three context-aware lines, each of which
+auto-hides when there's nothing to show (no PR, empty inbox, no
+active announcements). Together they give you full PR-aware context
+without ever filling the screen with junk:
 
 ```
+🚨  CI broken on main — hold merges until #102 lands — #100              ← announcement (active issue)
+[Opus] │ my-project git:(feat/auth-fix*)
+Context █████░░░░░ 45% │ Usage ██░░░░░░░░ 25% (1h 30m / 5h)
 PR #42 fix login bug │ CI ✓ 12  ✗ 1  ◐ 3 │ Reviews: ✓ dev1  ✓ dev2  ◐ dev3 │ Ship: ✗ (1 failing check)
+Inbox: alice #4231, bob #4128 +2 more                                    ← PRs awaiting your review
 ```
 
-Glyph legend: `✓` approved / passing · `⚠` changes requested · `✗` failing /
-blocked · `◐` pending · `↻` stale review (new commits after review).
+| Line | What it shows | When it appears |
+|---|---|---|
+| **Announcement** | Pinned issues + `announcement`-labeled issues for the current repo. Severity from `severity:critical`/`severity:warning` labels (defaults to info). | Any time a matching issue is open in the current repo. |
+| **PR status** | PR number, CI counts, reviewer states, ship verdict for the current branch. | When the current branch has an open PR in the repo. |
+| **Review inbox** | PRs across all repos where you're a requested reviewer. | When at least one PR is awaiting your review. |
+
+Glyph legend:
+- `✓` approved / passing · `⚠` changes requested · `✗` failing / blocked
+- `◐` pending · `↻` stale review (new commits after review)
+- `🚨` critical announcement · `⚠` warning · `📢` info
 
 The PR line uses an async refresh model so the 300ms render loop never
 shells out to `gh`. A small refresher binary
@@ -137,9 +152,43 @@ turn (via a `Stop` hook), and the HUD reads only from that file.
    }
    ```
 
-The line auto-hides on non-GitHub remotes, repos without an open PR for
-the branch, or when the snapshot is older than
+All three GitHub lines auto-hide on non-GitHub remotes, when there's
+nothing to display, or when the snapshot is older than
 `github.snapshotMaxAgeMs` (default 5 min).
+
+### Per-repo overrides
+
+Drop a `.claude-hud.json` at any repo root to customize the HUD just
+for that repo. It deep-merges over your user-global config — write
+only the keys you want to override.
+
+Example: in a repo where you want a quieter HUD (no inbox, no
+announcements) but keep PR status:
+
+```json
+{
+  "github": {
+    "inbox": { "enabled": false },
+    "announcements": { "enabled": false }
+  }
+}
+```
+
+Or restrict the inbox to only the current repo (default) vs. all
+repos you have review requests in:
+
+```json
+{
+  "github": {
+    "inbox": { "scope": "all" }
+  }
+}
+```
+
+The same shape works for any field in the user-global config — display
+toggles, colors, element ordering. Resolution order: defaults → user
+global → repo. Commit `.claude-hud.json` for team-wide config; add it
+to `.gitignore` for personal-only overrides.
 
 ---
 
@@ -263,6 +312,14 @@ Chinese HUD labels are available as an explicit opt-in. English stays the defaul
 | `github.reviews.maxNames` | number | `4` | Maximum reviewer names to render before truncating to `+N`. |
 | `github.reviews.filterBots` | boolean | `true` | Hide bot reviewers (`dependabot[bot]`, `renovate`, CODEOWNERS auto-assignments, etc.). |
 | `github.reviews.showStale` | boolean | `true` | Surface a `↻` glyph when a reviewer reviewed before subsequent commits. |
+| `github.inbox.enabled` | boolean | `true` | Show PRs awaiting your review. Hides entirely when the inbox is empty. |
+| `github.inbox.scope` | `current-repo` \| `all` | `current-repo` | Filter inbox to PRs in the same repo as cwd (default) or include every repo where you're a requested reviewer. |
+| `github.inbox.showAuthors` | boolean | `true` | Show `author #N` for each PR; set false to render just the count. |
+| `github.inbox.maxItems` | number | `4` | Max items to list before truncating to `+N more`. |
+| `github.announcements.enabled` | boolean | `true` | Show banner lines for pinned/labeled announcement issues in the current repo. Hides when none are open. |
+| `github.announcements.label` | string | `"announcement"` | Issue label that flags an item as an announcement (case-sensitive). |
+| `github.announcements.includePinned` | boolean | `true` | Also surface the repo's pinned issues even without the label. |
+| `github.announcements.maxItems` | number | `3` | Max banner lines to render. Severity ordering wins: critical → warning → info, then most-recently-updated. |
 
 `colors.barFilled` and `colors.barEmpty` accept a single visible grapheme. Control characters, invisible format characters (bidi controls, zero-width joiners, variation selectors), line/paragraph separators, and noncharacters are rejected. Wide characters (emoji, CJK) may affect bar alignment depending on the terminal.
 

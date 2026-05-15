@@ -172,12 +172,40 @@ export interface PrStatus {
   shipReason?: string;
 }
 
+export interface InboxItem {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  repoOwner: string;
+  repoName: string;
+  /** ISO timestamp of last update — used for ordering and freshness display. */
+  updatedAt: string;
+}
+
+export type AnnouncementSeverity = 'info' | 'warning' | 'critical';
+export type AnnouncementSource = 'pinned-issue' | 'labeled-issue';
+
+export interface AnnouncementItem {
+  number: number;
+  title: string;
+  url: string;
+  severity: AnnouncementSeverity;
+  source: AnnouncementSource;
+  /** ISO timestamp of last update (for staleness display and ordering). */
+  updatedAt: string;
+}
+
 export interface PrSnapshot {
   /** ISO timestamp the snapshot was written. */
   updatedAt: string;
   repo: { owner: string; name: string } | null;
   branch: string | null;
   pr: PrStatus | null;
+  /** PRs across all repos that are awaiting the authenticated user's review. */
+  inbox?: InboxItem[];
+  /** Active announcements (pinned + labeled issues) for the current repo. */
+  announcements?: AnnouncementItem[];
   error?: PrSnapshotError;
 }
 
