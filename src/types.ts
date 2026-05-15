@@ -129,6 +129,58 @@ export interface TranscriptData {
   lastCompactPostTokens?: number;
 }
 
+export type ReviewState = 'approved' | 'changes_requested' | 'commented' | 'pending';
+
+export interface ReviewerStatus {
+  login: string;
+  state: ReviewState;
+  isStale?: boolean;
+  isBot?: boolean;
+}
+
+export interface CiCheckCounts {
+  success: number;
+  failure: number;
+  pending: number;
+  total: number;
+}
+
+export type ShipVerdict = 'ready' | 'warning' | 'blocked' | 'unknown';
+
+export type PrSnapshotError =
+  | 'gh-unauthed'
+  | 'no-gh'
+  | 'non-github'
+  | 'no-pr'
+  | 'fetch-failed'
+  | 'no-remote';
+
+export interface PrStatus {
+  number: number;
+  title: string;
+  url: string;
+  headBranch: string;
+  baseBranch: string;
+  draft: boolean;
+  mergeable: 'mergeable' | 'conflicting' | 'unknown';
+  reviewers: ReviewerStatus[];
+  /** Logins of reviewers requested but who have not yet submitted a review. */
+  pendingRequests: string[];
+  ci: CiCheckCounts;
+  shipVerdict: ShipVerdict;
+  /** Optional reason summary used when verdict is not 'ready' (e.g., "12 commits behind main"). */
+  shipReason?: string;
+}
+
+export interface PrSnapshot {
+  /** ISO timestamp the snapshot was written. */
+  updatedAt: string;
+  repo: { owner: string; name: string } | null;
+  branch: string | null;
+  pr: PrStatus | null;
+  error?: PrSnapshotError;
+}
+
 export interface RenderContext {
   stdin: StdinData;
   transcript: TranscriptData;
@@ -146,4 +198,5 @@ export interface RenderContext {
   claudeCodeVersion?: string;
   effortLevel?: string;
   effortSymbol?: string;
+  prSnapshot: PrSnapshot | null;
 }

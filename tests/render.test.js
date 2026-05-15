@@ -1904,8 +1904,8 @@ test('renderSessionLine combines showFileStats with showDirty and showAheadBehin
   const line = renderSessionLine(ctx);
   assert.ok(line.includes('feature'), 'expected branch name');
   assert.ok(line.includes('*'), 'expected dirty indicator');
-  assert.ok(line.includes('↑2'), 'expected ahead count');
-  assert.ok(line.includes('↓1'), 'expected behind count');
+  assert.ok(line.includes('↑ 2'), 'expected ahead count');
+  assert.ok(line.includes('↓ 1'), 'expected behind count');
   assert.ok(line.includes('!3'), 'expected modified count');
   assert.ok(line.includes('✘1'), 'expected deleted count');
 });
@@ -1923,7 +1923,7 @@ test('renderProjectLine colors ahead count at warning threshold', () => {
   ctx.gitStatus = { branch: 'main', isDirty: false, ahead: 12, behind: 0 };
 
   const line = renderProjectLine(ctx);
-  assert.ok(line?.includes('\x1b[33m↑12\x1b[0m'), 'ahead count should use warning color');
+  assert.ok(line?.includes('\x1b[33m↑ 12\x1b[0m'), 'ahead count should use warning color');
 });
 
 test('renderProjectLine colors ahead count at critical threshold', () => {
@@ -1939,7 +1939,7 @@ test('renderProjectLine colors ahead count at critical threshold', () => {
   ctx.gitStatus = { branch: 'main', isDirty: false, ahead: 25, behind: 0 };
 
   const line = renderProjectLine(ctx);
-  assert.ok(line?.includes('\x1b[31m↑25\x1b[0m'), 'ahead count should use critical color');
+  assert.ok(line?.includes('\x1b[31m↑ 25\x1b[0m'), 'ahead count should use critical color');
 });
 
 test('renderProjectLine strips control characters from project and branch links', () => {

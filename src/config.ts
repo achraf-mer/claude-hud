@@ -20,7 +20,9 @@ export type GitBranchOverflowMode = 'truncate' | 'wrap';
  */
 export type ModelFormatMode = 'full' | 'compact' | 'short';
 export type TimeFormatMode = 'relative' | 'absolute' | 'both';
-export type HudElement = 'project' | 'addedDirs' | 'context' | 'usage' | 'promptCache' | 'memory' | 'environment' | 'tools' | 'agents' | 'todos' | 'sessionTime';
+export type GlyphSpacingMode = 'tight' | 'normal' | 'loose';
+export type ReviewerStyleMode = 'auto' | 'names' | 'counts';
+export type HudElement = 'project' | 'addedDirs' | 'context' | 'usage' | 'promptCache' | 'memory' | 'environment' | 'tools' | 'agents' | 'todos' | 'sessionTime' | 'prStatus';
 
 export type AddedDirsLayout = 'inline' | 'line';
 export type HudColorName =
@@ -60,6 +62,7 @@ export const DEFAULT_ELEMENT_ORDER: HudElement[] = [
   'promptCache',
   'memory',
   'environment',
+  'prStatus',
   'tools',
   'agents',
   'todos',
@@ -71,6 +74,23 @@ export const DEFAULT_MERGE_GROUPS: HudElement[][] = [
 ];
 
 const KNOWN_ELEMENTS = new Set<HudElement>(DEFAULT_ELEMENT_ORDER);
+
+export interface GithubReviewsConfig {
+  /** How reviewer status is rendered. `auto` shows names when ≤ maxNames, counts otherwise. */
+  style: ReviewerStyleMode;
+  maxNames: number;
+  filterBots: boolean;
+  /** Surface a stale glyph (↻) when a reviewer reviewed before subsequent commits. */
+  showStale: boolean;
+}
+
+export interface GithubConfig {
+  enabled: boolean;
+  /** Absolute path to the PR snapshot JSON written by the refresher binary. */
+  snapshotPath: string;
+  snapshotMaxAgeMs: number;
+  reviews: GithubReviewsConfig;
+}
 
 export interface HudConfig {
   language: Language;
@@ -89,6 +109,7 @@ export interface HudConfig {
     pushWarningThreshold: number;
     pushCriticalThreshold: number;
   };
+  github: GithubConfig;
   display: {
     showModel: boolean;
     showProject: boolean;
@@ -132,6 +153,8 @@ export interface HudConfig {
     modelOverride: string;
     customLine: string;
     timeFormat: TimeFormatMode;
+    /** Controls space between status glyphs (✓ ✗ ◐ ↑ ↓ etc.) and adjacent content. */
+    glyphSpacing: GlyphSpacingMode;
   };
   colors: HudColorOverrides;
 }
@@ -152,6 +175,17 @@ export const DEFAULT_CONFIG: HudConfig = {
     branchOverflow: 'truncate',
     pushWarningThreshold: 0,
     pushCriticalThreshold: 0,
+  },
+  github: {
+    enabled: true,
+    snapshotPath: '',
+    snapshotMaxAgeMs: 300000,
+    reviews: {
+      style: 'auto',
+      maxNames: 4,
+      filterBots: true,
+      showStale: true,
+    },
   },
   display: {
     showModel: true,
@@ -196,6 +230,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     modelOverride: '',
     customLine: '',
     timeFormat: 'relative',
+    glyphSpacing: 'normal',
   },
   colors: {
     context: 'green',
@@ -253,6 +288,48 @@ function validateModelFormat(value: unknown): value is ModelFormatMode {
 
 function validateTimeFormat(value: unknown): value is TimeFormatMode {
   return value === 'relative' || value === 'absolute' || value === 'both';
+}
+
+function validateGlyphSpacing(value: unknown): value is GlyphSpacingMode {
+  return value === 'tight' || value === 'normal' || value === 'loose';
+}
+
+function validateReviewerStyle(value: unknown): value is ReviewerStyleMode {
+  return value === 'auto' || value === 'names' || value === 'counts';
+}
+
+function validatePositiveCount(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
+function mergeGithubConfig(value: unknown): GithubConfig {
+  const fallback = DEFAULT_CONFIG.github;
+  if (!value || typeof value !== 'object') {
+    return {
+      enabled: fallback.enabled,
+      snapshotPath: fallback.snapshotPath,
+      snapshotMaxAgeMs: fallback.snapshotMaxAgeMs,
+      reviews: { ...fallback.reviews },
+    };
+  }
+
+  const raw = value as Partial<GithubConfig> & { reviews?: Partial<GithubReviewsConfig> };
+  const reviewsRaw: Partial<GithubReviewsConfig> = raw.reviews ?? {};
+
+  return {
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : fallback.enabled,
+    snapshotPath: typeof raw.snapshotPath === 'string' ? raw.snapshotPath.trim() : fallback.snapshotPath,
+    snapshotMaxAgeMs: validateFreshnessMs(raw.snapshotMaxAgeMs),
+    reviews: {
+      style: validateReviewerStyle(reviewsRaw.style) ? reviewsRaw.style : fallback.reviews.style,
+      maxNames: validatePositiveCount(reviewsRaw.maxNames, fallback.reviews.maxNames),
+      filterBots: typeof reviewsRaw.filterBots === 'boolean' ? reviewsRaw.filterBots : fallback.reviews.filterBots,
+      showStale: typeof reviewsRaw.showStale === 'boolean' ? reviewsRaw.showStale : fallback.reviews.showStale,
+    },
+  };
 }
 
 function validateColorName(value: unknown): value is HudColorName {
@@ -594,7 +671,12 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
     timeFormat: validateTimeFormat(migrated.display?.timeFormat)
       ? migrated.display.timeFormat
       : DEFAULT_CONFIG.display.timeFormat,
+    glyphSpacing: validateGlyphSpacing(migrated.display?.glyphSpacing)
+      ? migrated.display.glyphSpacing
+      : DEFAULT_CONFIG.display.glyphSpacing,
   };
+
+  const github = mergeGithubConfig((migrated as Record<string, unknown>).github);
 
   const colors = {
     context: validateColorValue(migrated.colors?.context)
@@ -638,7 +720,7 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
       : DEFAULT_CONFIG.colors.barEmpty,
   };
 
-  return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, gitStatus, display, colors };
+  return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, gitStatus, github, display, colors };
 }
 
 export async function loadConfig(): Promise<HudConfig> {

@@ -99,6 +99,48 @@ Context █████░░░░░ 45% │ Usage ██░░░░░░░
 ▸ Fix authentication bug (2/5)                   ← Todo progress
 ```
 
+### GitHub workflow line (opt-in, requires `gh` CLI)
+
+When enabled, the HUD shows live PR status for the current branch:
+
+```
+PR #42 fix login bug │ CI ✓ 12  ✗ 1  ◐ 3 │ Reviews: ✓ dev1  ✓ dev2  ◐ dev3 │ Ship: ✗ (1 failing check)
+```
+
+Glyph legend: `✓` approved / passing · `⚠` changes requested · `✗` failing /
+blocked · `◐` pending · `↻` stale review (new commits after review).
+
+The PR line uses an async refresh model so the 300ms render loop never
+shells out to `gh`. A small refresher binary
+(`dist/bin/refresh-github.js`) writes a snapshot file after each Claude
+turn (via a `Stop` hook), and the HUD reads only from that file.
+
+**One-time setup** (after the plugin is installed):
+
+1. Make sure `gh` is authenticated: `gh auth login`
+2. Add a `Stop` hook in `~/.claude/settings.json` that runs the refresher.
+   Find the plugin's `dist/bin/refresh-github.js` path (the auto-updating
+   pattern from `statusLine.command` works here too), and configure:
+
+   ```json
+   {
+     "hooks": {
+       "Stop": [
+         {
+           "matcher": "*",
+           "hooks": [
+             { "type": "command", "command": "node \"$PLUGIN_DIR/dist/bin/refresh-github.js\"" }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+The line auto-hides on non-GitHub remotes, repos without an open PR for
+the branch, or when the snapshot is older than
+`github.snapshotMaxAgeMs` (default 5 min).
+
 ---
 
 ## How It Works
@@ -213,6 +255,14 @@ Chinese HUD labels are available as an explicit opt-in. English stays the defaul
 | `colors.custom` | color value | `208` | Color for the optional custom line |
 | `colors.barFilled` | string | `█` | Character used for the filled portion of progress bars |
 | `colors.barEmpty` | string | `░` | Character used for the empty portion of progress bars |
+| `display.glyphSpacing` | `tight` \| `normal` \| `loose` | `normal` | Space between status glyphs (`✓` `✗` `◐` `↑` `↓`) and adjacent text. `tight` = no space, `normal` = single space, `loose` = double space. Applied HUD-wide (ahead/behind, PR status, reviewers, CI counts). |
+| `github.enabled` | boolean | `true` | Enable the opt-in PR status line. Requires the refresher binary (`dist/bin/refresh-github.js`) to be wired into a `Stop` hook and `gh auth login` to be set up. The element auto-hides when no snapshot is present, so leaving this on with no hook configured costs nothing. |
+| `github.snapshotPath` | string | `""` | Absolute path to the PR snapshot JSON. Empty string resolves to `<config-dir>/plugins/claude-hud/cache/github.json`. |
+| `github.snapshotMaxAgeMs` | number | `300000` | Snapshots older than this are ignored. Keeps stale data from being rendered as if it were live. |
+| `github.reviews.style` | `auto` \| `names` \| `counts` | `auto` | Reviewer display style. `auto` shows names when ≤ `maxNames` reviewers, otherwise switches to glyph counts. |
+| `github.reviews.maxNames` | number | `4` | Maximum reviewer names to render before truncating to `+N`. |
+| `github.reviews.filterBots` | boolean | `true` | Hide bot reviewers (`dependabot[bot]`, `renovate`, CODEOWNERS auto-assignments, etc.). |
+| `github.reviews.showStale` | boolean | `true` | Surface a `↻` glyph when a reviewer reviewed before subsequent commits. |
 
 `colors.barFilled` and `colors.barEmpty` accept a single visible grapheme. Control characters, invisible format characters (bidi controls, zero-width joiners, variation selectors), line/paragraph separators, and noncharacters are rejected. Wide characters (emoji, CJK) may affect bar alignment depending on the terminal.
 
