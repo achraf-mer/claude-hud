@@ -84,7 +84,11 @@ export async function fetchPrSnapshot(opts: FetchOptions): Promise<PrSnapshot> {
     return baseSnapshot(updatedAt, repo, branch, 'gh-unauthed');
   }
 
-  const view = await getPrViewForBranch(cwd, timeoutMs);
+  if (!branch) {
+    return baseSnapshot(updatedAt, repo, null, 'no-pr');
+  }
+
+  const view = await getPrViewForBranch(cwd, repo, branch, timeoutMs);
   if (view === null) {
     return baseSnapshot(updatedAt, repo, branch, 'fetch-failed');
   }
@@ -186,12 +190,30 @@ const PR_VIEW_FIELDS = [
 
 async function getPrViewForBranch(
   cwd: string,
+  repo: NonNullable<PrSnapshot['repo']>,
+  branch: string,
   timeoutMs: number,
 ): Promise<GhPrView | 'no-pr' | null> {
+  // Use `gh pr list --head <branch> --repo <owner/name>` rather than `gh pr
+  // view` so we don't depend on gh's default-repo detection (which can pick
+  // upstream over origin when both remotes exist, missing same-repo PRs).
+  // Take the first matching open PR if any.
+  const repoSpec = `${repo.owner}/${repo.name}`;
   try {
+    const { stdout: listStdout } = await execFileAsync(
+      'gh',
+      ['pr', 'list', '--repo', repoSpec, '--head', branch, '--state', 'open', '--limit', '1', '--json', 'number'],
+      { cwd, timeout: timeoutMs, encoding: 'utf8' },
+    );
+    const list = JSON.parse(listStdout) as Array<{ number?: number }>;
+    if (!Array.isArray(list) || list.length === 0 || typeof list[0].number !== 'number') {
+      return 'no-pr';
+    }
+    const prNumber = list[0].number;
+
     const { stdout } = await execFileAsync(
       'gh',
-      ['pr', 'view', '--json', PR_VIEW_FIELDS],
+      ['pr', 'view', String(prNumber), '--repo', repoSpec, '--json', PR_VIEW_FIELDS],
       { cwd, timeout: timeoutMs, encoding: 'utf8' },
     );
     const parsed = JSON.parse(stdout) as GhPrView;
