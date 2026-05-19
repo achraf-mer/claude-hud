@@ -6,6 +6,17 @@ import type { PrSnapshot } from './types.js';
  */
 export declare function getDefaultSnapshotPath(cwd: string, homeDir?: string): string;
 /**
+ * Persist a PrSnapshot to the per-cwd snapshot file used by `loadPrSnapshot`.
+ * Used by the render path's inline-refresh-on-mismatch logic to keep the
+ * shared snapshot in sync with what was just fetched, so subsequent renders
+ * (and the Stop / SessionStart hooks) see the same fresh data.
+ *
+ * Failures are swallowed silently: the worst case is that the next render
+ * has to refresh again. We never want a snapshot-write error to break the
+ * HUD output.
+ */
+export declare function writeSnapshot(config: HudConfig, cwd: string, snapshot: PrSnapshot): void;
+/**
  * Load and validate the PR snapshot written by the refresher binary.
  *
  * Returns null when:

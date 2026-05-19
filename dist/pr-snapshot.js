@@ -93,6 +93,26 @@ function resolveSnapshotPath(config, cwd) {
     }
     return getDefaultSnapshotPath(cwd);
 }
+/**
+ * Persist a PrSnapshot to the per-cwd snapshot file used by `loadPrSnapshot`.
+ * Used by the render path's inline-refresh-on-mismatch logic to keep the
+ * shared snapshot in sync with what was just fetched, so subsequent renders
+ * (and the Stop / SessionStart hooks) see the same fresh data.
+ *
+ * Failures are swallowed silently: the worst case is that the next render
+ * has to refresh again. We never want a snapshot-write error to break the
+ * HUD output.
+ */
+export function writeSnapshot(config, cwd, snapshot) {
+    try {
+        const snapshotPath = resolveSnapshotPath(config, cwd);
+        fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+        fs.writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2), 'utf8');
+    }
+    catch {
+        // Intentional: a failed snapshot write must never break rendering.
+    }
+}
 function parseDate(value) {
     if (typeof value !== 'string') {
         return null;
