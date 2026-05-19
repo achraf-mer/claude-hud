@@ -323,17 +323,20 @@ Verify the first bytes are `7B 0D 0A` (`{` + CRLF) or `7B 0A` (`{` + LF), not `E
 [System.IO.File]::ReadAllBytes($path)[0..2]
 ```
 
-## Step 3b: Install GitHub Workflow Stop Hook
+## Step 3b: Install GitHub Workflow Hooks (Stop + SessionStart)
 
-The HUD's GitHub workflow features (PR status, review inbox, announcement banner) read from a snapshot file written by a refresher binary at `dist/bin/refresh-github.js`. Without a `Stop` hook running this refresher after each Claude turn, the snapshot stales within 5 minutes and the PR/inbox/announcement lines disappear silently — a confusing failure mode that's hard to diagnose.
+The HUD's GitHub workflow features (PR status, review inbox, announcement banner) read from a snapshot file written by a refresher binary at `dist/bin/refresh-github.js`. To keep that snapshot in sync with the current branch's PR, two hooks invoke the refresher:
 
-This step installs the Stop hook so the snapshot stays fresh automatically. The hook is harmless when `gh` isn't installed or authed (it silently no-ops) and costs ~2 GitHub API calls per Claude turn, well under the 5000/hour authenticated quota.
+- **`Stop`** — fires after each Claude turn. Catches new PRs, new reviews, new CI checks since the last interaction.
+- **`SessionStart`** — fires when Claude Code launches. Catches branch switches that happened outside Claude Code (e.g., `git checkout` in another terminal) so the first statusline render after a restart shows the current branch's data instead of stale snapshot content.
 
-### Idempotency check
+Without these hooks, the snapshot stales within 5 minutes and the PR/inbox/announcement lines either disappear or show data from a previous branch — a confusing silent failure mode that's hard to diagnose.
 
-Read the current merged `settings.json`. If any entry under `hooks.Stop[]` already has a `command` field containing `refresh-github.js` OR `claude-hud`, **skip this step entirely** — the hook is already installed and we don't want duplicates.
+This step idempotently installs both hooks. They're harmless when `gh` isn't installed or authed (they silently no-op) and cost ~2 GitHub API calls per fire, well under the 5000/hour authenticated quota.
 
-### Generate the Stop hook command
+### Generate the hook command (shared between Stop and SessionStart)
+
+Both hooks invoke the **same** command — the refresher binary discovered via dynamic path detection, so plugin updates Just Work without re-running setup.
 
 **Platform `darwin` or `linux`, or Platform `win32` + Shell `bash`**:
 
@@ -345,15 +348,21 @@ The `[ -n "$plugin_dir" ] &&` guard makes the hook no-op cleanly if the plugin i
 
 **Platform `win32` + Shell `powershell`, `pwsh`, or `cmd`** (OSTYPE not `msys`/`cygwin`):
 
-PowerShell auto-install is not yet supported. Skip writing the hook and tell the user:
+PowerShell auto-install is not yet supported. Skip writing the hooks and tell the user:
 
-> ⚠ Stop hook auto-install is not yet supported on Windows PowerShell. To enable GitHub features (PR status / review inbox / announcement banner), install the hook manually using the snippet in the README's "GitHub workflow lines" section, or switch to Git Bash for setup.
+> ⚠ Hook auto-install is not yet supported on Windows PowerShell. To enable GitHub features (PR status / review inbox / announcement banner), install the hooks manually using the snippet in the README's "GitHub workflow lines" section, or switch to Git Bash for setup.
+
+### Per-event idempotency check
+
+For each of the two events (`Stop` and `SessionStart`), read the current merged `settings.json`. If any entry under `hooks.<event>[]` already has a `command` field containing `refresh-github.js` OR `claude-hud`, **skip that event** — the hook is already installed there.
+
+Handle the two events independently. A user upgrading from a previous setup that only installed the Stop hook (PR #2 era) will pass the Stop idempotency check (skip it) and fall through to install the missing SessionStart hook. A user reinstalling fresh installs both. A user re-running setup with both already present gets a clean no-op.
 
 ### Apply to settings.json
 
-Use the same merge-and-write pattern as Step 3 (same JSON-safety guarantees, same retry-on-conflict behavior). If `hooks` doesn't exist, create it as an empty object. If `hooks.Stop` doesn't exist, create it as an empty array.
+Use the same merge-and-write pattern as Step 3 (same JSON-safety guarantees, same retry-on-conflict behavior). If `hooks` doesn't exist, create it as an empty object. If `hooks.Stop` or `hooks.SessionStart` doesn't exist, create the missing one as an empty array.
 
-**Append** a new entry to `hooks.Stop[]` (do NOT replace or modify existing entries — the user may have other Stop hooks like GitKraken, language servers, or analytics tools that must be preserved):
+For each event where the idempotency check did NOT match, **append** a new entry to `hooks.<event>[]` (do NOT replace or modify existing entries — the user may have other hooks like GitKraken, language servers, or analytics tools that must be preserved):
 
 ```json
 {
@@ -361,7 +370,7 @@ Use the same merge-and-write pattern as Step 3 (same JSON-safety guarantees, sam
   "hooks": [
     {
       "type": "command",
-      "command": "{STOP_HOOK_COMMAND}"
+      "command": "{HOOK_COMMAND}"
     }
   ]
 }
@@ -369,18 +378,28 @@ Use the same merge-and-write pattern as Step 3 (same JSON-safety guarantees, sam
 
 ### Confirm
 
-After successful write, append to the user-facing summary one of these:
+After successful write, append to the user-facing summary based on what was installed:
 
-> ✅ Stop hook installed — GitHub PR status, review inbox, and announcement banner will auto-refresh on every Claude turn.
+If both hooks were just installed:
 
-Or if the idempotency check matched (already installed):
+> ✅ Stop hook installed — snapshot refreshes after each Claude turn.
+> ✅ SessionStart hook installed — snapshot refreshes when Claude Code launches.
 
-> ✓ Stop hook was already installed — no changes made.
+If only one was installed (the other was already present from a previous setup run, e.g. upgrading from PR #2 era):
+
+> ✓ Stop hook was already installed.
+> ✅ SessionStart hook installed — snapshot refreshes when Claude Code launches.
+
+(Or the symmetric variant if SessionStart was already there but Stop wasn't.)
+
+If both hooks were already installed:
+
+> ✓ Both hooks were already installed — no changes made.
 
 
 After successfully writing the config, tell the user:
 
-> ✅ Config written (statusLine and Stop hook). **Please restart Claude Code now** — quit and run `claude` again in your terminal.
+> ✅ Config written (statusLine, Stop hook, SessionStart hook). **Please restart Claude Code now** — quit and run `claude` again in your terminal.
 > Once restarted, run `/claude-hud:setup` again to complete Step 4 and verify the HUD is working.
 
 **Windows note**: Keep the restart guidance separate from runtime installation guidance.
